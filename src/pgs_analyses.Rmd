@@ -57,6 +57,24 @@ dat <- dat %>%
 nsurgs <- max(dat$surgid)
 ```
 
+### Visualize outcomes overall in the dataset
+
+```{r}
+dat %>%
+    ggplot(aes(y = "", x = laparascopic_duration)) +
+    stat_halfeye(
+            aes(
+                fill = stat(
+                    cut_cdf_qi(cdf, .width = c(0.5, 0.8, 0.99), labels = scales::percent_format())
+                )
+            ),
+            .width = c(0.5, 0.8, 0.99)
+        ) +
+        scale_fill_brewer(direction = -1, palette = "Purples", na.translate = FALSE) +
+    labs(fill = "", y = "", x = "Laparoscopic duration (min)") +
+    coord_cartesian(xlim = c(-5, 150))
+```
+
 ## Prepare data for ulam/stan
 
 ### Duration analyses
@@ -103,9 +121,34 @@ gdat <- list(
 )
 ```
 
+## CVS attainment analyses
+
+Analyses data is nearly ready,
+except for `dat$time_cvs_attained`.
+
+We want to look at the binomial outcome,
+of whether or not CVS was achieved.
+To do so, just need to transform the data,
+so if it's `NA` then the CVS was never achieved.
+
+```{r}
+cvs <- as.integer(!is.na(dat$time_cvs_attained))
+```
+
+Put the data together for stan:
+
+```{r}
+cdat <- list(
+    cvs = cvs,
+    sid = dat$surgid,
+    pgs = dat$pgs,
+    alpha = rep(2, 4)
+)
+```
+
 # Utility functions
 
-## Unstandardize (back to original scale)
+## De-standardize (back to original scale)
 
 Used to move from the standardized/centered log scale to normal scale
 to facilitate analyses:
@@ -798,7 +841,7 @@ tidy_hole_samples <- extract_samples(
         # change from one PGS level to the other
         incr_delta_p = p - lag(p),
         # change from PGS1 to that PGS level
-        delta_p = p - min(p)
+        delta_p = p - p[1]
     ) %>%
     ungroup()
 ```
@@ -838,7 +881,7 @@ bar_gb <- tidy_hole_samples %>%
     mutate(PGS = as.factor(PGS))
 bar_gb %>%
     halfeye(delta_p, PGS) +
-    coord_cartesian(xlim = c(0, 0.4)) +
+    coord_cartesian(xlim = c(-0.2, 0.4)) +
     labs(
         y = "PGS",
         x = "Added probability of a gallbladder hole"
@@ -879,7 +922,7 @@ surg2_gb <- tidy_hole_samples %>%
 
 surg2_gb %>%
     halfeye(delta_p, PGS) +
-    coord_cartesian(xlim = c(0, 0.7)) +
+    coord_cartesian(xlim = c(-0.2, 0.7)) +
     labs(
         y = "PGS",
         x = "Added probability of a gallbladder hole"
@@ -909,4 +952,319 @@ Numbers for this:
 surg2_gb %>%
     group_by(PGS) %>%
     ci_ints(bOR)
+```
+
+# Critical View of Safety Attainment Analysis
+
+## Priors determination
+As before, we will use weakly regularizing priors.
+
+### Intercept
+
+We will reuse the N(0, 1.5) prior we established for GB hole:
+
+```{r}
+p <- rnorm(1000, 0, 1.5)
+hist(inv_logit(p))
+```
+
+### PGS coefficient
+
+Remember, this is the effect of a PGS5.
+We will need to simulate the intercept then add the slope,
+followed by undoing the logit to see the probability:
+
+```{r}
+pint <- rnorm(1000, 0, 1.5)
+ppgs <- rnorm(1000, 0, 2)
+pgsdiff <- inv_logit(pint + ppgs) - inv_logit(pint)
+hist(pgsdiff)
+```
+
+This prior, N(0, 2), is a wide and rather uninformative prior,
+but still fair.
+It allows for some surgeons to obtain CVS for a PGS1 but for PGS5
+to never obtain it (due to technique preference).
+However, it still clusters most of the effects around zero,
+as we would, a priori, predict.
+
+### other priors
+Other priors will be the usual weakly regularizing ones,
+including Dirichlet of 2,
+Exponential 1,
+and LKJCorr of 4.
+
+
+## Formula
+
+Below is the centered version.
+The model given to Stan is the non-centered version
+that is mathematically equivalent but dramatically improves sampling.
+
+\begin{equation}
+\begin{split}
+CVS_i &\sim Bernoulli(p_i) \\
+logit(p_i) &= \alpha_{sid[i]} + \beta_{sid[i]} * \sum_{j = 0}^{PGS_i - 1} \delta_j \\
+\begin{bmatrix}
+    \alpha_{sid} \\
+    \beta_{sid} \\
+\end{bmatrix} &\sim MVNormal(
+    \begin{bmatrix}
+        \alpha \\
+        \beta
+    \end{bmatrix},
+    \mathbf{S}
+    ) \\
+\alpha &\sim Normal(0, 1.5) \\
+\beta &\sim Normal(0, 2) \\
+\delta &\sim Dirichlet(2) \\
+\mathbf{S} &=
+  \begin{pmatrix}
+    \sigma_{\alpha} & 0 \\
+    0 & \sigma_{\beta}
+  \end{pmatrix} 
+  \mathbf{R}
+  \begin{pmatrix}
+    \sigma_{\alpha} & 0 \\
+    0 & \sigma_{\beta}
+  \end{pmatrix} \\
+\mathbf{R} &=
+  \begin{pmatrix}
+    1 & \rho \\
+    \rho & 1
+  \end{pmatrix} \\
+\mathbf{R} &\sim LKJCorr(4) \\
+\sigma_{\alpha}, \sigma_{\beta} &\sim Exponential(1)
+\end{split}
+\end{equation}
+
+## Code
+
+```{r}
+set.seed(1234)
+cvs_mod <- ulam(
+    alist(
+        cvs ~ bernoulli(p),
+        logit(p) <- a_bar + ab_sid[sid, 1] + (bP_bar + ab_sid[sid, 2]) * sum(delta_j[1:pgs]),
+        a_bar ~ normal(0, 1.5),
+        bP_bar ~ normal(0, 2),
+        vector[5]: delta_j <<- append_row(0, delta),
+        simplex[4]: delta ~ dirichlet(alpha),
+        transpars> matrix[sid, 2]: ab_sid <-
+            compose_noncentered(sigma_sid, L_Rho_sid, z_sid),
+        matrix[2, sid]: z_sid ~ normal(0, 1),
+        vector[2]: sigma_sid ~ exponential(1),
+        cholesky_factor_corr[2]: L_Rho_sid ~ lkj_corr_cholesky(4),
+        gq> matrix[2, 2]: Rho_sid <<- Chol_to_Corr(L_Rho_sid),
+        gq> vector[sid]:a <<- a_bar + ab_sid[, 1],
+        gq> vector[sid]:bP <<- bP_bar + ab_sid[, 2]
+    ),
+    data = cdat,
+    cores = 4,
+    chains = 4,
+    iter = 5000,
+    log_lik = TRUE
+)
+```
+
+## Diagnostic Evaluation of Markov Chains
+
+### Rhat4 and effective sampling size
+
+```{r}
+precis(cvs_mod, depth = 3)
+```
+
+All Rhat4 values are 1.
+
+Each parameter also sampled well.
+
+### PSIS/WAIC
+
+```{r}
+PSIS(cvs_mod)
+WAIC(cvs_mod)
+```
+
+The are some Pareto k values > 0.5. As long as < 0.7, not an issue.
+Are they?
+
+```{r}
+PSIS(cvs_mod, pointwise = TRUE) %>%
+    high_k_rows()
+```
+
+Only 1 row with a k of 0.506,
+so minimal issue with outliers.
+
+### Trace rank plot (trankplot)
+
+```{r, eval = FALSE}
+trankplot(cvs_mod)
+```
+
+Good mixing as shown with large amount of overlap.
+
+### Trace plot
+
+```{r, eval = FALSE}
+traceplot(cvs_mod)
+```
+
+Chains are stationary with a visible central tendency,
+have good mixing, and converge.
+
+## Evaluate model results
+First, obtain tidy samples, as we did with the duration and GB hole model.
+Additionally, transform the result to get the absolute probability of
+CVS and the OR of a obtained CVS for each PGS:
+
+```{r}
+tidy_cvs_samples <- extract_samples(
+    cvs_mod,
+    pars = c(
+        "a_bar",
+        paste0("a[", 1:nsurgs, "]"),
+        "bP_bar",
+        paste0("bP[", 1:nsurgs, "]"),
+        # sigma_a
+        "sigma_sid[1]",
+        # sigma_b
+        "sigma_sid[2]",
+        paste0("Rho_sid[1,2]"),
+        paste0("delta[", 1:4, "]")
+    )
+) %>%
+    tidy_surgeons() %>%
+    sum_deltas() %>%
+    tidy_pgs() %>%
+    mutate(
+        p = inv_logit(a + bP * sum_delta_j),
+        bOR = exp(bP * sum_delta_j)
+    ) %>%
+    group_by(surgeon, sample_num) %>%
+    # calc change in probability for each sample
+    # group by surgeon as well because each sample_num
+    # has the info for all 10 surgeons and bar surgeon
+    mutate(
+        # change from one PGS level to the other
+        incr_delta_p = p - lag(p),
+        # change from PGS1 to that PGS level
+        delta_p = p - p[1]
+    ) %>%
+    ungroup()
+```
+
+Key to know, is that:
+
+`incr_delta_p` is the probability difference from one level to the next.
+It will be `NA` for a PGS1.
+
+`delta_p` is probability difference from a certain PGS level to PGS1.
+
+`p` is the probability of a cvs at that PGS level
+
+`bOR` is the increased odds, compared to a PGS of 1, of obtaining CVS
+
+## Plot results
+
+### For all surgeons
+
+Remember that "bar" is the average of all the surgeons:
+
+```{r}
+tidy_cvs_samples %>%
+    mutate(surgeon = parse_factor(surgeon, levels = c("bar", as.character(1:nsurgs)))) %>%
+    ggplot(aes(PGS, p)) +
+    stat_lineribbon() +
+    facet_wrap(~ surgeon) +
+    scale_fill_brewer(palette = "Purples") +
+    labs(y = "Probability of CVS Attainment")
+```
+
+### On average across all surgeons
+
+```{r}
+bar_cvs <- tidy_cvs_samples %>%
+    filter(surgeon == "bar", PGS != 1) %>%
+    mutate(PGS = as.factor(PGS))
+bar_cvs %>%
+    halfeye(delta_p, PGS) +
+    coord_cartesian(xlim = c(-0.6, 0.2)) +
+    labs(
+        y = "PGS",
+        x = "Change in Probability from\nPGS1 of Obtaining CVS"
+    )
+```
+
+And numbers for this:
+
+```{r}
+bar_cvs %>%
+    group_by(PGS) %>%
+    ci_ints(delta_p)
+```
+
+And looking at the odd ratios:
+
+```{r}
+bar_cvs %>%
+    halfeye(bOR, PGS) +
+    coord_cartesian(xlim = c(-0.1, 2)) +
+    geom_vline(xintercept = 1, linetype = 2)
+```
+
+Numbers for this:
+
+```{r}
+bar_cvs %>%
+    group_by(PGS) %>%
+    ci_ints(bOR)
+```
+
+### For a surgeon particularly affected by PGS
+
+```{r}
+surg4_cvs <- tidy_cvs_samples %>%
+    filter(surgeon == "4", PGS != 1) %>%
+    mutate(PGS = as.factor(PGS))
+
+surg4_cvs %>%
+    halfeye(delta_p, PGS) +
+    coord_cartesian(xlim = c(-0.6, 0.3)) +
+    labs(
+        y = "PGS",
+        x = "Probability change of CVS Attainment\nFrom PGS1"
+    )
+```
+
+And numbers for this:
+
+```{r}
+surg4_cvs %>%
+    group_by(PGS) %>%
+    ci_ints(delta_p)
+```
+
+And looking at odds ratios:
+
+```{r}
+surg4_cvs %>%
+    halfeye(bOR, PGS) +
+    coord_cartesian(xlim = c(-0.1, 3)) +
+    geom_vline(xintercept = 1, linetype = 2)
+```
+
+Numbers for this:
+
+```{r}
+surg4_cvs %>%
+    group_by(PGS) %>%
+    ci_ints(bOR)
+```
+
+# Environment
+
+```{r}
+devtools::session_info()
 ```
