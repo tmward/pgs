@@ -1,0 +1,514 @@
+---
+title: PGS Analyses
+author: Thomas Ward
+output: pdf_document
+---
+
+
+```{r}
+library(magrittr)
+library(dplyr)
+library(readr)
+library(forcats)
+library(tidyr)
+library(stringr)
+library(ggplot2)
+library(rethinking)
+library(ggdist)
+set_ulam_cmdstan(TRUE)
+theme_set(theme_light())
+```
+
+# Prepare modeling data
+
+## Load
+
+```{r}
+dat <- readr::read_csv("../data/chole_pgs.csv", col_types = "iiidddddli")
+skimr::skim_without_charts(dat)
+```
+
+## Keep surgeons with 5 or more cases
+
+Arrange rows by surgeons number of cases
+(surgeons with most cases will be at the top, fewest cases at the bottom).
+Then replace the `videoid` with a new sequential integer id based on this order.
+This will allow us to drop surgeons with few cases and
+then still have a nice sequential id to join back on to during analysis of results:
+
+```{r}
+dat <- dat %>%
+    mutate(surgid = as.integer(fct_infreq(as.character(surgid)))) %>%
+    arrange(surgid) %>%
+    mutate(videoid = 1:nrow(.))
+```
+
+Keep surgeons with 5 or more cases:
+
+```{r}
+dat <- dat %>%
+    group_by(surgid) %>%
+    filter(n() >= 5) %>%
+    ungroup()
+```
+
+```{r}
+nsurgs <- max(dat$surgid)
+```
+
+## Prepare data for ulam/stan
+
+### Duration analyses
+
+We performed analyses on the log scale
+given we were concerned about the magnitude of duration
+and that factors that increase duration tend to do so exponentially.
+For example, an inflamed gallbladder is harder to grasp,
+but also harder to dissect, and combining the two together,
+you have an exponential increase in time.
+
+We also standardize our variables,
+as it assists with making weakly regularizing priors:
+
+```{r}
+log_duration <- log(dat$laparascopic_duration)
+mean_log_duration <- mean(log_duration)
+centered_log_duration <- log_duration - mean_log_duration
+sd_log_duration <- sd(centered_log_duration)
+std_log_duration <- centered_log_duration / sd_log_duration
+```
+
+Put list of data for modeling together.
+Note the `alpha`, which is our dirichlet prior
+(prior of 2 for PGS2, PGS3, PGS4, and PGS5):
+
+```{r}
+ddat <- list(
+    duration = std_log_duration,
+    sid = dat$surgid,
+    pgs = dat$pgs,
+    alpha = rep(2, 4)
+)
+```
+
+# Utility functions
+
+## Unstandardize (back to original scale)
+
+Used to move from the standardized/centered log scale to normal scale
+to facilitate analyses:
+
+```{r}
+unstd <- function(x) {
+    exp(x * sd_log_duration + mean_log_duration)
+}
+```
+
+## Find rows with high pareto k
+
+```{r}
+high_k_rows <- function(results) {
+    results %>%
+        as_tibble(rownames = "videoid") %>%
+        mutate(videoid = as.integer(videoid)) %>%
+        inner_join(dat, by = "videoid") %>%
+        filter(k >= 0.5)
+}
+```
+
+## samples from stan model
+
+This is a thin wrapper around `rethinking` packages `extract.samples()`
+that returns a tibble with `janitor` fixing column names and
+a sample number given to each sample.
+
+```{r}
+extract_samples <- function(..., seed = 1234) {
+    set.seed(seed)
+    extract.samples(...) %>%
+        as_tibble() %>%
+        # case = "none" to not mess up capitalization of our parameters
+        # otherwise fixes brackets, commas, and other problem chars
+        janitor::clean_names(case = "none") %>%
+        mutate(sample_num = paste0("sample", 1:nrow(.)), .before = 1L)
+}
+```
+
+## tidy surgeons
+
+Each sample has the info for one or more surgeons on each row.
+We want this info "tidy", that is, one per row,
+so make a function to do that:
+
+```{r}
+tidy_surgeons <- function(df) {
+    df %>%
+        pivot_longer(
+            starts_with(c("a_", "bP")),
+            names_to = c(".value", "surgeon"),
+            names_sep = "_"
+        )
+}
+```
+
+## tidy pgs
+
+Each sample, when using pgs levels, has 5 tidy rows of info,
+1 for each PGS.
+So need to pivot these longer:
+
+```{r}
+tidy_pgs <- function(df) {
+    df %>%
+        pivot_longer(
+            starts_with("PGS"),
+            names_to = c(NA, "PGS"),
+            names_pattern = "(PGS)([1-5])",
+            names_transform = list("PGS" = as.integer),
+            # to keep consistent with var name in model definition
+            values_to = "sum_delta_j"
+        )
+}
+```
+
+# Abbreviations in formulas
+
+- `sid`: Deidentified surgeon id
+- `PGS`: Parkland Grading Scale for gallbladder inflammation
+- `MVNormal`: Multivariate normal distribution
+- `LKJCorr`: Lewandowski, Kurowicka, and Joe Correlation Distribution
+- `CVS`: Critical View of Safety
+
+# Duration Analysis
+
+## Priors determination
+We will use weakly regularizing priors, that is,
+those that constrain parameters to those that are logically possible,
+while still allowing for some implausibly strong relationships
+if that is what the data determines.
+
+I will graph simulated values of the priors to help determine good ones to use:
+
+Try a prior of N(0, 1) for the intercept (`a`) and
+N(0, 0.3) for the slope for PGS5, `bp`:
+
+```{r}
+set.seed(1234)
+max_dur <- max(ddat$duration)
+min_dur <- min(ddat$duration)
+tibble(
+    sample_num = paste0("sample", 1:50),
+    a = rnorm(50, mean = 0, sd = 1),
+    bp = rnorm(50, mean = 0, sd = 0.3)
+) %>%
+    mutate(x = list(seq(from = -0.1, to = 1.1, length.out = 30))) %>%
+    tidyr::unnest(x) %>%
+    mutate(y = a + bp * x, og_y = unstd(y)) %>%
+    ggplot(aes(x, og_y, group = sample_num)) +
+    geom_line() +
+    scale_y_log10() +
+    labs(y = "y (minutes)") +
+    geom_hline(yintercept = unstd(c(min_dur, max_dur)), linetype = 2, color = "blue")
+```
+
+The intercept prior looks acceptable.
+The slope prior is much too tight
+(remember slope is for a PGS5, so the maximum effect).
+The min/max of data never even reached.
+Let's try making it a bit bigger:
+
+
+```{r}
+set.seed(1234)
+max_dur <- max(ddat$duration)
+min_dur <- min(ddat$duration)
+tibble(
+    sample_num = paste0("sample", 1:50),
+    a = rnorm(50, mean = 0, sd = 1),
+    bp = rnorm(50, mean = 0, sd = 1.2)
+) %>%
+    mutate(x = list(seq(from = -0.1, to = 1.1, length.out = 30))) %>%
+    tidyr::unnest(x) %>%
+    mutate(y = a + bp * x, og_y = unstd(y)) %>%
+    ggplot(aes(x, og_y, group = sample_num)) +
+    geom_line() +
+    #scale_y_log10() +
+    #labs(y = "y (log scale, minutes)") +
+    labs(y = "y (minutes)") +
+    geom_hline(yintercept = unstd(c(min_dur, max_dur)), linetype = 2, color = "blue")
+```
+
+The numbers are now constrained to mostly realistic values.
+
+Other priors will be the usual weakly regularizing ones,
+including Dirichlet of 2,
+Exponential 1,
+and LKJCorr of 4.
+
+## Formula
+
+Below is the centered version.
+The model given to Stan is the non-centered version
+that is mathematically equivalent but dramatically improves sampling.
+
+\begin{equation}
+\begin{split}
+log(Duration_i) &\sim Normal(\mu_i, \sigma) \\
+\mu_i &= \alpha_{sid[i]} + \beta_{sid[i]} * \sum_{j = 0}^{PGS_i - 1} \delta_j \\
+\begin{bmatrix}
+    \alpha_{sid} \\
+    \beta_{sid} \\
+\end{bmatrix} &\sim MVNormal(
+    \begin{bmatrix}
+        \alpha \\
+        \beta
+    \end{bmatrix},
+    \mathbf{S}
+    ) \\
+\alpha &\sim Normal(0, 1) \\
+\beta &\sim Normal(0, 1.2) \\
+\delta &\sim Dirichlet(2) \\
+\mathbf{S} &=
+  \begin{pmatrix}
+    \sigma_{\alpha} & 0 \\
+    0 & \sigma_{\beta}
+  \end{pmatrix} 
+  \mathbf{R}
+  \begin{pmatrix}
+    \sigma_{\alpha} & 0 \\
+    0 & \sigma_{\beta}
+  \end{pmatrix} \\
+\mathbf{R} &=
+  \begin{pmatrix}
+    1 & \rho \\
+    \rho & 1
+  \end{pmatrix} \\
+\mathbf{R} &\sim LKJCorr(4) \\
+\sigma, \sigma_{\alpha}, \sigma_{\beta} &\sim Exponential(1)
+\end{split}
+\end{equation}
+
+
+## Code
+
+```{r, eval = FALSE}
+set.seed(1234)
+dur_mod <- ulam(
+    alist(
+        duration ~ normal(mu, sigma),
+        mu <- a_bar + ab_sid[sid, 1] + (bP_bar + ab_sid[sid, 2]) * sum(delta_j[1:pgs]),
+        transpars> matrix[sid, 2]:ab_sid <-
+             compose_noncentered(sigma_sid, L_Rho_sid, z_sid),
+        matrix[2, sid]:z_sid ~ normal(0, 1),
+        a_bar ~ normal(0, 1),
+        bP_bar ~ normal(0, 1.2),
+        vector[2]:sigma_sid ~ exponential(1),
+        sigma ~ exponential(1),
+        cholesky_factor_corr[2]:L_Rho_sid ~ lkj_corr_cholesky(4),
+        vector[5]:delta_j <<- append_row(0, delta),
+        simplex[4]:delta ~ dirichlet(alpha),
+        # compute correlation matrix from Cholesky matrix
+        gq> matrix[2, 2]: Rho_sid <<- Chol_to_Corr(L_Rho_sid),
+        # for our analysis sake, compute a[sid] and b[sid]
+        gq> vector[sid]:a <<- a_bar + ab_sid[, 1],
+        gq> vector[sid]:bP <<- bP_bar + ab_sid[, 2]
+    ),
+    data = ddat,
+    cores = 4,
+    chains = 4,
+    iter = 5000,
+    log_lik = TRUE
+)
+```
+
+## Diagnostic Evaluation of Markov Chains
+
+### Rhat4 and effective sampling size
+
+```{r}
+precis(dur_mod, depth = 3)
+```
+
+All Rhat4 values are 1.
+
+Each parameter also sampled well.
+
+### PSIS/WAIC
+
+```{r}
+PSIS(dur_mod)
+WAIC(dur_mod)
+```
+
+The are some Pareto k values > 0.5. As long as < 0.7, not an issue.
+Are they?
+
+```{r}
+PSIS(dur_mod, pointwise = TRUE) %>%
+    high_k_rows()
+```
+
+Only 2 rows total, and both have k < 0.6,
+so minimal issue with outliers.
+
+### Trace rank plot (trankplot)
+
+```{r, eval = FALSE}
+trankplot(dur_mod)
+```
+
+Good mixing as shown with large amount of overlap.
+
+### Trace plot
+
+```{r, eval = FALSE}
+traceplot(dur_mod)
+```
+
+Chains are stationary with a visible central tendency,
+have good mixing, and converge. Excellent.
+
+## Evaluate model results
+
+List of the parameters I care about from the model:
+
+1. Intercepts (`a[N]` and average `a_bar`)
+2. beta for pgs5 (`bP[N]` and average `bP_bar`)
+3. Correlation (`Rho_sid[1, 2]`)
+4. sigmas (overall, for intercept, for beta)
+5. deltas (for incremental effect of each PGS)
+
+```{r}
+pars <- c(
+    "a_bar",
+    paste0("a[", 1:nsurgs, "]"),
+    "bP_bar",
+    paste0("bP[", 1:nsurgs, "]"),
+    # sigma for entire model
+    "sigma",
+    # sigma_a
+    "sigma_sid[1]",
+    # sigma_b
+    "sigma_sid[2]",
+    paste0("Rho_sid[1,2]"),
+    paste0("delta[", 1:4, "]")
+)
+```
+
+Now time to extract samples from stan:
+
+```{r}
+dur_samples <- extract_samples(dur_mod, pars = pars) %>%
+    # change names for ease of remembering rather than having to
+    # remember their position in the matrices
+    rename(sigma_a = sigma_sid_1, sigma_bP = sigma_sid_2, rho = Rho_sid_1_2) %>%
+    # sum deltas together for ease of calculating
+    mutate(
+        PGS1 = 0,
+        PGS2 = delta_1,
+        PGS3 = PGS2 + delta_2,
+        PGS4 = 1 - delta_4,
+        PGS5 = 1
+    )
+```
+
+Now, let us generate a "new" unseen surgeon
+to see what the model will predict for a new surgeon,
+make the data tidy (one row per surgeon per PGS per sample),
+then calculate the outcome from the samples to see the model's predictions.
+
+```{r}
+tidy_dur_samples <- dur_samples %>%
+    # generates a "new" unseen surgeon 
+    mutate(
+        a_new = rnorm(nrow(.), a_bar, sigma_a),
+        bP_new = rnorm(nrow(.), bP_bar, sigma_bP)
+    ) %>%
+    select(sample_num, starts_with(c("a_", "bP", "PGS")), sigma) %>%
+    tidy_surgeons() %>%
+    tidy_pgs() %>%
+    mutate(mu = a + bP * sum_delta_j, mu_og = unstd(mu)) %>%
+    select(sample_num, surgeon, PGS, mu, mu_og, sigma)
+```
+
+## Plot results
+
+### For every surgeon
+Visualization of the effects PGS has on each surgeon.
+Surgeon `bar` is the average surgeon, and
+surgeon `new` is for a future never seen surgeon.
+
+```{r}
+tidy_dur_samples %>%
+    mutate(surgeon = parse_factor(surgeon, levels = c("bar", as.character(1:nsurgs), "new"))) %>%
+    ggplot(aes(PGS, mu_og)) +
+    stat_lineribbon() +
+    facet_wrap(~ surgeon, scales = "free_y") +
+    scale_fill_brewer(labels = c("95%", "80%", "50%"), palette = "Purples") +
+    labs(y = "Case duration (min)")
+```
+
+### On average across all surgeons
+
+First calculate how much more time PGS2-5 was for each sample
+compared to PGS1:
+
+```{r}
+dur_pgs_deltas_bar <- tidy_dur_samples %>%
+    filter(surgeon == "bar") %>%
+    group_by(sample_num) %>%
+    mutate(pgs_delta = mu_og - min(mu_og)) %>%
+    ungroup() %>%
+    filter(PGS != 1) %>%
+    mutate(PGS = as.factor(PGS))
+```
+
+Then plot this:
+
+```{r}
+dur_pgs_deltas_bar %>%
+    ggplot(aes(y = PGS, x = pgs_delta)) +
+    stat_halfeye(
+        aes(
+            fill = stat(
+                cut_cdf_qi(cdf, .width = c(0.5, 0.8, 0.95), labels = scales::percent_format())
+            )
+        ),
+        .width = c(0.5, 0.8, 0.95)
+    ) +
+    scale_fill_brewer(direction = -1, palette = "Purples", na.translate = FALSE) +
+    coord_cartesian(xlim = c(0, 45)) +
+    labs(
+        fill = "Compatibility\nIntervals",
+        x = "Added time to case (min)"
+    )
+```
+
+What are the numbers of the compatibility intervals:
+
+```{r}
+dur_pgs_deltas_bar %>%
+    group_by(PGS) %>%
+    summarise(
+        mean = mean(pgs_delta),
+        low_50 = quantile(pgs_delta, probs = 0.25),
+        high_50 = quantile(pgs_delta, probs = 0.75),
+        low_66 = quantile(pgs_delta, probs = 0.17),
+        high_66 = quantile(pgs_delta, probs = 0.83),
+        low_80 = quantile(pgs_delta, probs = 0.20),
+        high_80 = quantile(pgs_delta, probs = 0.80),
+        low_89 = quantile(pgs_delta, probs = 0.055),
+        high_89 = quantile(pgs_delta, probs = 0.945),
+        low_95 = quantile(pgs_delta, probs = 0.025),
+        high_95 = quantile(pgs_delta, probs = 0.975)
+    ) %>%
+    mutate(across(where(is.numeric), ~ round(., 2))) %>%
+    unite(int_50, contains("_50"), sep = ", ") %>%
+    unite(int_66, contains("_66"), sep = ", ") %>%
+    unite(int_80, contains("_80"), sep = ", ") %>%
+    unite(int_89, contains("_89"), sep = ", ") %>%
+    unite(int_95, contains("_95"), sep = ", ") %>%
+    knitr::kable()
+```
+
+All units are in minutes.
