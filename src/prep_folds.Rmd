@@ -1,0 +1,72 @@
+---
+title: Prep Folds
+author: Thomas Ward
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+This document will prep the cross-validation folds from the ground truth data
+into CSVs appropriate for fastai's csv dataloader.
+
+```{r}
+library(tidyverse)
+```
+
+# Prepare data
+
+## Generate splits stratified by PGS
+
+```{r}
+pgs_gt <- read_csv("../data/pgs_gt.csv", col_types = "cc")
+```
+
+```{r}
+nsplits = 10
+pgs_splits <- pgs_gt %>%
+    group_by(pgs) %>%
+    mutate(data_split = ntile(n = nsplits)) %>%
+    ungroup()
+```
+
+## Load appearance and adhesions ground truth
+
+```{r}
+appearance_gt <- read_csv("../data/appearance_gt.csv", col_types = "cc")
+adhesions_gt <- read_csv("../data/adhesions_gt.csv", col_types = "cc")
+```
+
+## Add PGS stratified splits info to appearance and adhesions
+
+```{r}
+appearance_splits <- appearance_gt %>%
+    inner_join(pgs_splits, by = "fname") %>%
+    select(-pgs)
+```
+
+```{r}
+adhesions_splits <- adhesions_gt %>%
+    inner_join(pgs_splits, by = "fname") %>%
+    select(-pgs)
+```
+
+# Write data for fastai
+
+The fastai csv reader data loader wants three columns:
+
+1. filename
+2. label
+3. Boolean indicator for validation set or not (fastai is in Python, so "True" and "False")
+
+```{r}
+for (i in 1:nsplits) {
+    appearance_splits %>%
+        mutate(is_valid = if_else(data_split == i, "True", "False"), .keep = "unused") %>%
+        write_csv(paste0("../output/appearances_split_", i, ".csv"))
+    adhesions_splits %>%
+        mutate(is_valid = if_else(data_split == i, "True", "False"), .keep = "unused") %>%
+        write_csv(paste0("../output/adhesions_split_", i, ".csv"))
+    pgs_splits %>%
+        mutate(is_valid = if_else(data_split == i, "True", "False"), .keep = "unused") %>%
+        write_csv(paste0("../output/pgs_split_", i, ".csv"))
+}
+```
