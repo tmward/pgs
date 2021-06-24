@@ -1,0 +1,190 @@
+---
+title: CV Analyses
+author: Thomas Ward
+date: "`r Sys.Date()`"
+output: pdf_document
+---
+
+
+```{r}
+library(tidyverse)
+library(irr)
+```
+
+# Load results
+
+```{r}
+results <- read_csv("../data/cv_results.csv", col_types = "ciiiii")
+```
+
+# Utility functions
+
+## Calculate Krippendorff's alpha
+
+Convenience function that can be used with `summarise()`
+
+```{r}
+kripp_alpha <- function(col1, col2) {
+    matrix(c(col1, col2), ncol = length(col1), byrow = TRUE) %>%
+        irr::kripp.alpha(method = "ordinal") %>%
+        pluck("value")
+}
+```
+
+## Calculate Krippendorff's alpha in boostrap
+
+This will be used by dplyr in nested list dataframes:
+
+```{r}
+kripp_alpha_df <- function(df) {
+    df %>%
+        as.matrix() %>%
+        t() %>%
+        irr::kripp.alpha(method = "ordinal") %>%
+        pluck("value")
+}
+```
+
+# Computer Vision Models Cross-Validated Performance
+
+Below I will calculate the cross-validated performance of the two CV models.
+
+The first is `pgs_combo`,
+which is the PGS determined by taking the results of the adhesion and appearance networks and
+calculating the PGS.
+
+The second is `pgs_only`, which is a network that was trained to only
+classify PGS, not taking into account any of the subcomponents.
+
+```{r}
+per_fold_results  <- results %>%
+    select(name, gt, pgs_combo, pgs_only, fold) %>%
+    group_by(fold) %>%
+    summarise(across(c("pgs_combo", "pgs_only"), list(krippa = ~ kripp_alpha(., gt))))
+```
+
+Now that we have per-fold metrics, we can calculate CV performance metrics,
+including mean, standard deviation (sd), and standard error (se):
+
+```{r}
+per_fold_results %>%
+    select(-fold) %>%
+    summarise(
+        across(everything(),
+            list(mean = mean, sd = sd, se = ~ sd(.) / sqrt(n()))
+        )
+    ) %>%
+    # make into nice table
+    pivot_longer(
+        everything(),
+        names_to = c("user", NA, "statistic", ".value"),
+        names_pattern = "pgs_([a-z]+)_(sqerr_)?([a-z]+)_([a-z]+)"
+    ) %>%
+    # calc 95% intervals using central limit theorem
+    rowwise() %>%
+    mutate(
+        conf.low = mean - 1.96 * se,
+        conf.high = mean + 1.96 * se
+    ) %>%
+    ungroup() %>%
+    arrange(statistic, user) %>%
+    knitr::kable(
+        digits = 2,
+        caption = "Cross-Validated Krippendorff's alpha performance"
+    )
+```
+
+# Second surgeon performance
+
+The second surgeon annotated all representative frames in one go.
+As recommended by Krippendorff,
+we can calculate the alpha statistic,
+then use the bootstrap to calculate confidence intervals.
+
+
+```{r}
+set.seed(1234)
+surg2_metrics <- results %>%
+    select(gt, pgs_surg2) %>%
+    modelr::bootstrap(10000) %>%
+    transmute(
+        kripa = map_dbl(strap, compose(kripp_alpha_df, as.data.frame))
+    ) %>%
+    summarise_all(
+        list(
+            mean = mean,
+            low_ci = ~ quantile(., probs = c(0.025)),
+            high_ci = ~ quantile(., probs = c(0.975))
+        )
+    ) %>%
+    pivot_longer(everything(), names_to = "statistic")
+```
+
+```{r}
+surg2_metrics %>%
+    knitr::kable(
+        digits = 2,
+        caption = "Performance of 2nd Surgeon, CI calculated with the bootstrap"
+    )
+```
+
+# Confusion Matrices
+
+
+```{r}
+# df and specify groundtruth col and prediction col
+plot_confusion_matrix <- function(df, groundtruth, prediction, title = "Confusion Matrix") {
+    df %>%
+        select(gt = {{ groundtruth }}, pred = {{prediction}}) %>%
+        count(gt, pred) %>%
+        group_by(gt) %>%
+        mutate(prop = n / sum(n)) %>%
+        ungroup() %>%
+        mutate(gt = fct_rev(as.factor(gt))) %>%
+        ggplot(aes(pred, gt)) +
+        scale_fill_gradient(name = "Proportion\n", low = "white", high = "#000099", limits = c(0, 1)) +
+        geom_tile(aes(fill = prop)) +
+        geom_text(aes(label = n)) +
+        theme_classic() +
+        theme(
+            axis.ticks = element_blank(),
+            axis.line = element_blank()
+        ) +
+        labs(
+            x = "PGS Classification",
+            y = "Ground Truth PGS",
+            title = title
+        )
+}
+```
+
+
+```{r}
+only_cf <- plot_confusion_matrix(results, gt, pgs_only, "PGS only CNN") +
+    theme(legend.position = "none")
+combo_cf <- plot_confusion_matrix(
+        results,
+        gt,
+        pgs_combo,
+        "PGS from adhesion/\nappearance CNN"
+    ) +
+    theme(legend.position = "none")
+surg2_cf <- plot_confusion_matrix(
+        results,
+        gt,
+        pgs_surg2,
+        "Second Surgeon PGS"
+    ) +
+    theme(legend.position = "none")
+```
+
+```{r}
+library(patchwork)
+(only_cf + plot_spacer() + combo_cf ) / (plot_spacer() + surg2_cf + plot_spacer())
+```
+
+# Environment
+
+```{r}
+sessioninfo::session_info()
+```
