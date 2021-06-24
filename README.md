@@ -20,6 +20,27 @@ Missing values are represented by the string NA (not surrounding by quotes).
 Values are quoted only if they contain a comma, quote, newline, or
 an NA that is a literal string NA and not a missing value.
 
+### `adhesions_gt.csv`
+
+Contains the adhesions ground truth for each representative PGS image.
+Details on the variable (column) names below:
+
+|variable |class     |description |
+|:--------|:-----|:-----------|
+|`fname`  |character    | Filename of PGS image |
+|`labels`    | character | adhesions ground truth |
+
+### `appearance_gt.csv`
+
+Contains the appearance ground truth for each representative PGS image.
+Details on the variable (column) names below:
+
+|variable |class     |description |
+|:--------|:-----|:-----------|
+|`fname`  |character    | Filename of PGS image |
+|`labels`    | character | appearance ground truth |
+
+
 ### `chole_pgs.csv`
 
 Contains the PGS, randomized surgeon ID, and various video metrics
@@ -53,3 +74,13 @@ and the second surgeon's annotations for PGS for representative images.
 |`pgs_surg2`     |integer | PGS Classifications for the Second Surgeon |
 |`pgs_only`     |integer | PGS Classifications for the PGS-only CV Model |
 |`fold`     |integer | Cross-validation fold. Does not apply for `pgs_surg2` |
+
+### `pgs_gt.csv`
+
+Contains the PGS ground truth for each representative PGS image.
+Details on the variable (column) names below:
+
+|variable |class     |description |
+|:--------|:-----|:-----------|
+|`fname`  |character    | Filename of PGS image |
+|`labels`    | character | PGS ground truth |
