@@ -12,14 +12,18 @@ Additionally, it was submitted for publication consideration.
 
 ## `data/`
 
-### `chole_pgs.csv`
-
-A comma-separated values file that is UTF-8 encoded.
+All `.csv` files are
+comma-separated values files that are UTF-8 encoded.
 Values delimited by a comma.
 Column names are on the first line.
 Missing values are represented by the string NA (not surrounding by quotes).
 Values are quoted only if they contain a comma, quote, newline, or
 an NA that is a literal string NA and not a missing value.
+
+### `chole_pgs.csv`
+
+Contains the PGS, randomized surgeon ID, and various video metrics
+for each video.
 Details on the variable (column) names below:
 
 
@@ -38,14 +42,8 @@ Details on the variable (column) names below:
 
 ### `cv_results.csv`
 
-A comma-separated values file that is UTF-8 encoded.
-Values delimited by a comma.
-Column names are on the first line.
-Missing values are represented by the string NA (not surrounding by quotes).
-Values are quoted only if they contain a comma, quote, newline, or
-an NA that is a literal string NA and not a missing value.
-Details on the variable (column) names below:
-
+Contains the results of the two computer vision models
+and the second surgeon's annotations for PGS for representative images.
 
 |variable |class     |description |
 |:--------|:-----|:-----------|
