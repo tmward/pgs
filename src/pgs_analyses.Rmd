@@ -16,8 +16,12 @@ library(stringr)
 library(ggplot2)
 library(rethinking)
 library(ggdist)
+library(showtext)
+font_add_google("Lato")
 set_ulam_cmdstan(TRUE)
-theme_set(theme_light())
+theme_set(theme_light(base_family = "Lato"))
+showtext_auto()
+histo_color = "#482878"
 ```
 
 # Prepare modeling data
@@ -55,24 +59,7 @@ dat <- dat %>%
 
 ```{r}
 nsurgs <- max(dat$surgid)
-```
-
-### Visualize outcomes overall in the dataset
-
-```{r}
-dat %>%
-    ggplot(aes(y = "", x = laparascopic_duration)) +
-    stat_halfeye(
-            aes(
-                fill = stat(
-                    cut_cdf_qi(cdf, .width = c(0.5, 0.8, 0.99), labels = scales::percent_format())
-                )
-            ),
-            .width = c(0.5, 0.8, 0.99)
-        ) +
-        scale_fill_brewer(direction = -1, palette = "Purples", na.translate = FALSE) +
-    labs(fill = "", y = "", x = "Laparoscopic duration (min)") +
-    coord_cartesian(xlim = c(-5, 150))
+nsurgs
 ```
 
 ## Prepare data for ulam/stan
@@ -147,6 +134,15 @@ cdat <- list(
 ```
 
 # Utility functions
+
+## standard error
+
+```{r}
+std_err  <- function(xs) {
+    sd(xs) / sqrt(length(xs))
+}
+```
+
 
 ## De-standardize (back to original scale)
 
@@ -1261,6 +1257,79 @@ Numbers for this:
 surg4_cvs %>%
     group_by(PGS) %>%
     ci_ints(bOR)
+```
+
+# Summarise inputs/outcomes
+
+## Numbers
+
+Number of surgeons:
+
+```{r}
+nsurgs
+```
+
+Number of videos with surgeons >= 5 cases:
+
+```{r}
+nrow(dat)
+```
+
+## PGS
+
+```{r}
+dat %>%
+    ggplot(aes(pgs)) +
+    geom_bar(fill = histo_color) +
+    labs(
+        x = "Parkland Grading Scale",
+        y = "Number of videos"
+    )
+ggsave("../output/pgs_distribution.svg", width = 6, height = 6)
+ggsave("../output/pgs_distribution.pdf", width = 6, height = 6)
+```
+
+```{r}
+dat %>%
+    count(pgs) %>%
+    mutate(prop = n / sum(n)) %>%
+    mutate(cum.sum = cumsum(prop))
+```
+
+## Laparoscopic duration
+
+```{r}
+dat %>%
+    ggplot(aes(y = "", x = laparascopic_duration)) +
+    stat_halfeye(
+            aes(
+                fill = stat(
+                    cut_cdf_qi(cdf, .width = c(0.5, 0.8, 0.99), labels = scales::percent_format())
+                )
+            ),
+            .width = c(0.5, 0.8, 0.99)
+        ) +
+        scale_fill_brewer(direction = -1, palette = "Purples", na.translate = FALSE) +
+    labs(fill = "% of cases", y = "", x = "Laparoscopic duration (min)") +
+    coord_cartesian(xlim = c(-5, 150))
+```
+
+```{r}
+summary(dat$laparascopic_duration)
+```
+
+## CVS number of cases with attainment
+
+```{r}
+mean(cdat$cvs)
+std_err(cdat$cvs)
+```
+
+## GB holes
+
+```{r}
+mean(gdat$hole)
+std_err(gdat$hole)
 ```
 
 # Environment
