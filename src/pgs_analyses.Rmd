@@ -950,6 +950,7 @@ tidy_hole_samples <- extract_samples(
         p = inv_logit(a + bP * sum_delta_j),
         bOR = exp(bP * sum_delta_j)
     ) %>%
+    arrange(sample_num, surgeon, PGS) %>%
     group_by(surgeon, sample_num) %>%
     # calc change in probability for each sample
     # group by surgeon as well because each sample_num
@@ -1030,7 +1031,19 @@ bar_gb %>%
     ci_ints(bOR)
 ```
 
-### For a surgeon particularly affected by PGS
+### For a surgeon most affected by PGS
+
+```{r}
+hole_bps <- precis(hole_mod, depth = 2, pars = paste0("bP[", 1:nsurgs, "]")) %>%
+    as_tibble(rownames = "var")
+# Least affected surgeon:
+slice_min(hole_bps, mean)
+# Most affected surgeon:
+slice_max(hole_bps, mean)
+```
+
+Surgeon 2 is most affected.
+
 
 ```{r}
 surg2_gb <- tidy_hole_samples %>%
