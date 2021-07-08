@@ -21,7 +21,7 @@ font_add_google("Lato")
 set_ulam_cmdstan(TRUE)
 theme_set(theme_light(base_family = "Lato"))
 showtext_auto()
-histo_color = "#482878"
+histo_color = "#4C0099"
 ```
 
 # Prepare modeling data
@@ -566,22 +566,47 @@ tidy_dur_samples %>%
     labs(y = "Case duration (min)")
 ```
 
-### On average across all surgeons
+### Calculate deltas
+Calculate the change from a PGS1 each PGS level has.
 
-First calculate how much more time PGS2-5 was for each sample
-compared to PGS1:
+First, who is affected the most and the least by PGS?
+This will manifest by the smallest and the largest `bP`:
+
+```{r, warnings = FALSE}
+dur_bps <- precis(dur_mod, depth = 2, pars = paste0("bP[", 1:nsurgs, "]")) %>%
+    as_tibble(rownames = "var")
+# Least affected surgeon:
+slice_min(dur_bps, mean)
+# Most affected surgeon:
+slice_max(dur_bps, mean)
+```
+
+Now actually calculate the deltas:
 
 ```{r}
-dur_pgs_deltas_bar <- tidy_dur_samples %>%
-    filter(surgeon == "bar") %>%
-    group_by(sample_num) %>%
-    mutate(pgs_delta = mu_og - min(mu_og)) %>%
+dur_pgs_deltas <- tidy_dur_samples %>%
+    # selecting our least, average, and most affected surgeons
+    filter(surgeon %in% c("bar", "4", "5")) %>%
+    # ensure correct order, with PGS1 as first row in future group
+    # will rely on this ordering to calculate delta
+    arrange(sample_num, surgeon, PGS) %>%
+    group_by(sample_num, surgeon) %>%
+    mutate(pgs_delta = mu_og - mu_og[1]) %>%
     ungroup() %>%
     filter(PGS != 1) %>%
+    # needed for ggdist to work
     mutate(PGS = as.factor(PGS))
 ```
 
+### On average across all surgeons
+
+How was the average surgeon affected?
+
 Then plot this:
+
+```{r}
+dur_pgs_deltas_bar  <- filter(dur_pgs_deltas, surgeon == "bar")
+```
 
 ```{r}
 dur_pgs_deltas_bar %>%
@@ -602,6 +627,14 @@ dur_pgs_deltas_bar %>%
 ```
 
 All units are in minutes.
+
+### surgeon most affected
+
+```{r}
+tidy_dur_samples %>%
+    group_by(sample_num
+```
+
 
 # Gallbladder Holes Analysis
 
