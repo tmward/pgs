@@ -6,9 +6,13 @@ output: pdf_document
 ---
 
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 library(tidyverse)
 library(irr)
+library(showtext)
+font_add_google("Lato")
+showtext_auto()
+theme_set(theme_classic(base_family = "Lato"))
 ```
 
 # Load results
@@ -61,6 +65,7 @@ per_fold_results  <- results %>%
     select(name, gt, pgs_combo, pgs_only, fold) %>%
     group_by(fold) %>%
     summarise(across(c("pgs_combo", "pgs_only"), list(krippa = ~ kripp_alpha(., gt))))
+knitr::kable(per_fold_results, digits = 3, caption = "Per-fold metrics")
 ```
 
 Now that we have per-fold metrics, we can calculate CV performance metrics,
@@ -130,17 +135,22 @@ surg2_metrics %>%
 
 # Confusion Matrices
 
-
 ```{r}
-# df and specify groundtruth col and prediction col
-plot_confusion_matrix <- function(df, groundtruth, prediction, title = "Confusion Matrix") {
+calculate_confusion_matrix <- function(df, groundtruth, prediction) {
     df %>%
         select(gt = {{ groundtruth }}, pred = {{prediction}}) %>%
         count(gt, pred) %>%
         group_by(gt) %>%
         mutate(prop = n / sum(n)) %>%
         ungroup() %>%
-        mutate(gt = fct_rev(as.factor(gt))) %>%
+        mutate(gt = fct_rev(as.factor(gt)))
+}
+```
+
+```{r}
+# df and specify groundtruth col and prediction col
+plot_confusion_matrix <- function(df, title = "Confusion Matrix") {
+    df %>%
         ggplot(aes(pred, gt)) +
         scale_fill_gradient(name = "Proportion\n", low = "white", high = "#000099", limits = c(0, 1)) +
         geom_tile(aes(fill = prop)) +
@@ -158,29 +168,44 @@ plot_confusion_matrix <- function(df, groundtruth, prediction, title = "Confusio
 }
 ```
 
+```{r}
+only_results <- calculate_confusion_matrix(results, gt, pgs_only)
+combo_results <- calculate_confusion_matrix(results, gt, pgs_combo)
+surg2_results <- calculate_confusion_matrix(results, gt, pgs_surg2)
+```
 
 ```{r}
-only_cf <- plot_confusion_matrix(results, gt, pgs_only, "PGS only CNN") +
+only_cf <- plot_confusion_matrix(only_results, "PGS only CNN") +
     theme(legend.position = "none")
 combo_cf <- plot_confusion_matrix(
-        results,
-        gt,
-        pgs_combo,
+        combo_results,
         "PGS from adhesion/\nappearance CNN"
     ) +
     theme(legend.position = "none")
-surg2_cf <- plot_confusion_matrix(
-        results,
-        gt,
-        pgs_surg2,
-        "Second Surgeon PGS"
-    ) +
+surg2_cf <- plot_confusion_matrix(surg2_results, "Second Surgeon PGS") +
     theme(legend.position = "none")
 ```
 
 ```{r}
 library(patchwork)
 (only_cf + plot_spacer() + combo_cf ) / (plot_spacer() + surg2_cf + plot_spacer())
+```
+
+## Paper figure
+
+```{r}
+bind_rows(
+        mutate(only_results, network = "PGS-only"),
+        mutate(combo_results, network = "PGS-combo")
+    ) %>%
+    mutate(network = parse_factor(network, levels = c("PGS-only", "PGS-combo"))) %>%
+    plot_confusion_matrix(title = "") +
+    facet_wrap(vars(network), ncol = 2)
+```
+
+```{r}
+ggsave("../output/confusion_matrices.pdf", width = 10, height = 6)
+ggsave("../output/confusion_matrices.svg", width = 10, height = 6)
 ```
 
 # Environment
