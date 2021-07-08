@@ -1272,6 +1272,7 @@ tidy_cvs_samples <- extract_samples(
         p = inv_logit(a + bP * sum_delta_j),
         bOR = exp(bP * sum_delta_j)
     ) %>%
+    arrange(sample_num, surgeon, PGS) %>%
     group_by(surgeon, sample_num) %>%
     # calc change in probability for each sample
     # group by surgeon as well because each sample_num
