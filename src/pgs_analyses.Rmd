@@ -6,7 +6,7 @@ output: pdf_document
 ---
 
 
-```{r}
+```{r, message = FALSE, warning = FALSE}
 library(magrittr)
 library(dplyr)
 library(readr)
@@ -416,7 +416,7 @@ log(Duration_i) &\sim Normal(\mu_i, \sigma) \\
 
 ## Code
 
-```{r, eval = FALSE}
+```{r}
 set.seed(1234)
 dur_mod <- ulam(
     alist(
@@ -551,6 +551,17 @@ tidy_dur_samples <- dur_samples %>%
 
 ## Plot results
 
+### Was duration correlated with starting time?
+
+```{r}
+extract_samples(dur_mod, pars = c("Rho_sid[1,2]")) %>%
+    rename(rho = Rho_sid_1_2) %>%
+    ci_ints(rho) %>%
+    knitr::kable(
+        caption = "Correlation between time to perform PGS1 case and the effect of incrementing PGS on laparoscopic duration"
+    )
+```
+
 ### For every surgeon
 Visualization of the effects PGS has on each surgeon.
 Surgeon `bar` is the average surgeon, and
@@ -572,7 +583,7 @@ Calculate the change from a PGS1 each PGS level has.
 First, who is affected the most and the least by PGS?
 This will manifest by the smallest and the largest `bP`:
 
-```{r, warnings = FALSE}
+```{r, warning = FALSE}
 dur_bps <- precis(dur_mod, depth = 2, pars = paste0("bP[", 1:nsurgs, "]")) %>%
     as_tibble(rownames = "var")
 # Least affected surgeon:
@@ -626,8 +637,11 @@ dur_pgs_deltas_bar %>%
     halfeye(pgs_delta, PGS) +
     coord_cartesian(xlim = c(0, 40)) +
     labs(
-        x = "Added time to case (min)"
+        x = "Added time to case (minutes)",
+        y = "Parkland Grading Scale"
     )
+ggsave("../output/pgs_duration.svg", width = 6, height = 6)
+ggsave("../output/pgs_duration.pdf", width = 6, height = 6)
 ```
 
 What are the numbers of the compatibility intervals:
@@ -693,7 +707,7 @@ dur_pgs_deltas_la %>%
 What are the numbers of the compatibility intervals:
 
 ```{r}
-dur_pgs_deltas_ma %>%
+dur_pgs_deltas_la %>%
     group_by(PGS) %>%
     ci_ints(pgs_delta) %>%
     knitr::kable()
@@ -1033,7 +1047,7 @@ bar_gb %>%
 
 ### For a surgeon most affected by PGS
 
-```{r}
+```{r, warning = FALSE}
 hole_bps <- precis(hole_mod, depth = 2, pars = paste0("bP[", 1:nsurgs, "]")) %>%
     as_tibble(rownames = "var")
 # Least affected surgeon:
@@ -1082,6 +1096,61 @@ Numbers for this:
 surg2_gb %>%
     group_by(PGS) %>%
     ci_ints(bOR)
+```
+
+And comparing to the average surgeon:
+
+```{r}
+tidy_hole_samples %>%
+    filter(surgeon %in% c("bar", "2")) %>%
+    mutate(surgeon = if_else(surgeon == "bar", "Average", "Most affected surgeon")) %>%
+    #mutate(surgeon = parse_factor(surgeon, levels = c("bar", as.character(1:nsurgs)))) %>%
+    ggplot(aes(PGS, p)) +
+    stat_lineribbon() +
+    facet_wrap(~ surgeon) +
+    scale_fill_brewer(labels = c("95%", "80%", "50%"), palette = "Purples") +
+    scale_y_continuous(labels = scales::percent_format()) +
+    labs(
+        x = "Parkland Grading Scale",
+        y = "Probability of an Inadvertent Gallbladder Hole",
+        fill = "Compatibility\nIntervals"
+    )
+ggsave("../output/pgs_hole.svg", width = 6, height = 4)
+ggsave("../output/pgs_hole.pdf", width = 6, height = 4)
+```
+
+numbers for average surgeon:
+
+```{r}
+tidy_hole_samples %>%
+    filter(surgeon == "bar") %>%
+    group_by(PGS) %>%
+    ci_ints(p)
+```
+
+numbers for most affected surgeon:
+
+```{r}
+tidy_hole_samples %>%
+    filter(surgeon == "2") %>%
+    group_by(sample_num, PGS) %>%
+    ci_ints(p)
+```
+
+```{r}
+tidy_hole_samples %>%
+    filter(surgeon == "2")
+```
+
+### Correlation of PGS1 and effect of incremental PGS
+
+```{r}
+extract_samples(hole_mod, pars = c("Rho_sid[1,2]")) %>%
+    rename(rho = Rho_sid_1_2) %>%
+    ci_ints(rho) %>%
+    knitr::kable(
+        caption = "Correlation between GB hole in PGS1 case and the effect of incrementing PGS"
+    )
 ```
 
 # Critical View of Safety Attainment Analysis
@@ -1394,6 +1463,39 @@ surg4_cvs %>%
     ci_ints(bOR)
 ```
 
+### Average and surgeon most affected by PGS
+
+```{r}
+tidy_cvs_samples %>%
+    filter(surgeon %in% c("bar", "4"), PGS != 1) %>%
+    mutate(
+        surgeon = if_else(surgeon == "bar", "Average", "Most affected surgeon"),
+        PGS = as.factor(PGS)
+    ) %>%
+    halfeye(bOR, PGS) +
+    facet_wrap(~ surgeon) +
+    coord_cartesian(xlim = c(-0.1, 2)) +
+    geom_vline(xintercept = 1, linetype = 2) +
+    labs(
+        x = "Odds Ratio of Attaining the Critical View of Safety",
+        y = "Parkland Grading Scale"
+    )
+ggsave("../output/pgs_cvs.svg", width = 6, height = 4)
+ggsave("../output/pgs_cvs.pdf", width = 6, height = 4)
+```
+
+### Correlation of PGS1 and effect of incremental PGS on CVS
+
+```{r}
+extract_samples(cvs_mod, pars = c("Rho_sid[1,2]")) %>%
+    rename(rho = Rho_sid_1_2) %>%
+    ci_ints(rho) %>%
+    knitr::kable(
+        caption = "Correlation between attaining CVS in PGS1 case and the effect of incrementing PGS"
+    )
+```
+
+
 # Summarise inputs/outcomes
 
 ## Numbers
@@ -1456,15 +1558,15 @@ summary(dat$laparascopic_duration)
 ## CVS number of cases with attainment
 
 ```{r}
+hist(cdat$cvs)
 mean(cdat$cvs)
-std_err(cdat$cvs)
 ```
 
 ## GB holes
 
 ```{r}
+hist(gdat$hole)
 mean(gdat$hole)
-std_err(gdat$hole)
 ```
 
 # Environment
