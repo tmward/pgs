@@ -200,7 +200,8 @@ bind_rows(
     ) %>%
     mutate(network = parse_factor(network, levels = c("PGS-only", "PGS-combo"))) %>%
     plot_confusion_matrix(title = "") +
-    facet_wrap(vars(network), ncol = 2)
+    facet_wrap(vars(network), ncol = 2) +
+    theme(text=element_text(size=20))
 ```
 
 ```{r}

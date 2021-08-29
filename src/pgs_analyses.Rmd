@@ -638,7 +638,7 @@ dur_pgs_deltas_bar %>%
     coord_cartesian(xlim = c(0, 40)) +
     labs(
         x = "Added time to case (minutes)",
-        y = "Parkland Grading Scale"
+        y = "PGS"
     )
 ggsave("../output/pgs_duration.svg", width = 6, height = 6)
 ggsave("../output/pgs_duration.pdf", width = 6, height = 6)
@@ -1111,7 +1111,7 @@ tidy_hole_samples %>%
     scale_fill_brewer(labels = c("95%", "80%", "50%"), palette = "Purples") +
     scale_y_continuous(labels = scales::percent_format()) +
     labs(
-        x = "Parkland Grading Scale",
+        x = "PGS",
         y = "Probability of an Inadvertent Gallbladder Hole",
         fill = "Compatibility\nIntervals"
     )
@@ -1477,8 +1477,8 @@ tidy_cvs_samples %>%
     coord_cartesian(xlim = c(-0.1, 2)) +
     geom_vline(xintercept = 1, linetype = 2) +
     labs(
-        x = "Odds Ratio of Attaining the Critical View of Safety",
-        y = "Parkland Grading Scale"
+        x = "Odds Ratio of Attaining the CVS",
+        y = "PGS"
     )
 ggsave("../output/pgs_cvs.svg", width = 6, height = 4)
 ggsave("../output/pgs_cvs.pdf", width = 6, height = 4)
