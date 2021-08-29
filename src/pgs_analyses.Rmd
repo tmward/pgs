@@ -1114,7 +1114,8 @@ tidy_hole_samples %>%
         x = "PGS",
         y = "Probability of an Inadvertent Gallbladder Hole",
         fill = "Compatibility\nIntervals"
-    )
+    ) +
+    guides(fill = guide_legend(reverse = TRUE))
 ggsave("../output/pgs_hole.svg", width = 6, height = 4)
 ggsave("../output/pgs_hole.pdf", width = 6, height = 4)
 ```
