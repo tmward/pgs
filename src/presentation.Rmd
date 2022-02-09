@@ -1,0 +1,168 @@
+Make sure to knit together `pgs_analyses.Rmd` first before this.
+
+# Duration varies widely
+
+```{r}
+dat %>%
+    ggplot(aes(y = "", x = laparascopic_duration)) +
+    geom_boxplot() +
+    geom_jitter(width = 0.25, size = 2, alpha = 0.2) +
+    labs(
+        title = NULL,
+        y = NULL,
+        x = "Duration (min)"
+    ) +
+    theme(text=element_text(size=20))
+```
+
+```{r}
+ggsave("../presentation/duration.svg", width = 11, height = 5, units = "in")
+```
+
+# Duration by PGS
+
+```{r}
+dat %>%
+    mutate(pgs = str_c("PGS-", as.character(pgs))) %>%
+    ggplot(aes(y = "", x = laparascopic_duration)) +
+    geom_boxplot() +
+    geom_jitter(aes(color = pgs), width = 0.25, size = 2) +
+    scale_color_viridis_d(option = "viridis", end = 0.9, direction = -1) +
+    labs(
+        title = NULL,
+        y = NULL,
+        x = "Duration (min)",
+        color = NULL
+    ) +
+    theme(text=element_text(size=20))
+ggsave("../presentation/duration_pgs.svg", width = 11, height = 5, units = "in")
+```
+
+# Duration by PGS and Surgeon
+
+```{r}
+dat %>%
+    mutate(pgs = str_c("PGS-", as.character(pgs))) %>%
+    mutate(surgid = fct_lump_n(as.factor(surgid), 5)) %>%
+    filter(surgid != "Other") %>%
+    #mutate(surgid = fct_rev(fct_reorder(surgid, laparascopic_duration))) %>%
+    ggplot(aes(y = surgid, x = laparascopic_duration)) +
+    geom_boxplot() +
+    geom_jitter(aes(color = pgs), width = 0.25, size = 2) +
+    scale_color_viridis_d(option = "viridis", end = 0.9, direction = -1) +
+    labs(
+        title = NULL,
+        y = "Surgeon ID",
+        x = "Duration (min)",
+        color = NULL
+    ) +
+    theme(text=element_text(size=20), axis.text.y = element_blank())
+ggsave("../presentation/duration_pgs_surgeon.svg", width = 11, height = 5, units = "in")
+```
+
+# Duration and PGS
+
+## All surgeons
+
+```{r}
+tidy_dur_samples %>%
+    mutate(surgeon = parse_factor(surgeon, levels = c("bar", as.character(1:nsurgs), "new"))) %>%
+    ggplot(aes(PGS, mu_og)) +
+    stat_lineribbon() +
+    facet_wrap(~ surgeon, scales = "free_y") +
+    scale_fill_brewer(labels = c("95%", "80%", "50%"), palette = "Purples") +
+    labs(
+        x = "PGS",
+        y = "Duration (min)",
+        fill = "Compatibility\nIntervals"
+    ) +
+    guides(fill = guide_legend(reverse = TRUE))
+```
+
+```{r}
+ggsave("../presentation/duration_all_surgeons.svg", width = 12, height = 6, units = "in")
+```
+
+## on average
+
+
+```{r}
+dur_pgs_deltas_bar %>%
+    halfeye(pgs_delta, PGS) +
+    coord_cartesian(xlim = c(0, 40)) +
+    labs(
+        x = "Added time to case (minutes)",
+        y = "PGS"
+    )
+ggsave("../presentation/pgs_duration_average.svg", width = 6, height = 6)
+```
+
+## most affected
+
+
+```{r}
+dur_pgs_deltas_ma %>%
+    halfeye(pgs_delta, PGS) +
+    coord_cartesian(xlim = c(0, 70)) +
+    labs(
+        x = "Added time to case (min)"
+    )
+ggsave("../presentation/pgs_duration_ma.svg", width = 6, height = 6)
+```
+
+# gb hole
+
+```{r}
+tidy_hole_samples %>%
+    filter(surgeon %in% c("bar", "2")) %>%
+    mutate(surgeon = if_else(surgeon == "bar", "Average", "Most affected surgeon")) %>%
+    #mutate(surgeon = parse_factor(surgeon, levels = c("bar", as.character(1:nsurgs)))) %>%
+    ggplot(aes(PGS, p)) +
+    stat_lineribbon() +
+    facet_wrap(~ surgeon) +
+    scale_fill_brewer(labels = c("95%", "80%", "50%"), palette = "Purples") +
+    scale_y_continuous(labels = scales::percent_format()) +
+    labs(
+        x = "PGS",
+        y = "Probability of an Inadvertent Gallbladder Hole",
+        fill = "Compatibility\nIntervals"
+    ) +
+    guides(fill = guide_legend(reverse = TRUE))
+ggsave("../presentation/pgs_hole.svg", width = 6, height = 4)
+```
+
+# cvs
+
+
+```{r}
+tidy_cvs_samples %>%
+    filter(surgeon %in% c("bar", "4"), PGS != 1) %>%
+    mutate(
+        surgeon = if_else(surgeon == "bar", "Average", "Most affected surgeon"),
+        PGS = as.factor(PGS)
+    ) %>%
+    halfeye(bOR, PGS) +
+    facet_wrap(~ surgeon) +
+    coord_cartesian(xlim = c(-0.1, 2)) +
+    geom_vline(xintercept = 1, linetype = 2) +
+    labs(
+        x = "Odds Ratio of Attaining the CVS",
+        y = "PGS"
+    )
+ggsave("../presentation/pgs_cvs.svg", width = 6, height = 4)
+```
+
+# cv model
+
+
+```{r}
+bind_rows(
+        mutate(only_results, network = "PGS-only"),
+        mutate(combo_results, network = "PGS-combo")
+    ) %>%
+    mutate(network = parse_factor(network, levels = c("PGS-only", "PGS-combo"))) %>%
+    plot_confusion_matrix(title = "") +
+    facet_wrap(vars(network), ncol = 2) +
+    theme(text=element_text(size=20))
+ggsave("../presentation/confusion.svg", width = 11, height = 5)
+```
