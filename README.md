@@ -6,7 +6,8 @@ Society of American Gastrointestinal and Endoscopic Surgeons (SAGES)
 Annual Meeting "Best Papers" Podium Presentation, number S107,
 titled:
 "Artificial Intelligence Prediction of Cholecystectomy Operative Course from Automated Identification of Gallbladder Inflammation".
-Additionally, it was submitted for publication consideration.
+Additionally, it was published in *Surgical Endoscopy* in January of 2022.
+A link to the paper is located [here](https://doi.org/10.1007/s00464-022-09009-z).
 
 # Overview of repository contents
 
@@ -130,6 +131,21 @@ to generate the graphics used in the podium presention.
 # Questions, comments, concerns, need help?
 Please contact me in the communication medium of your preference listed on my
 [Contact page](https://thomasward.com/contact/).
+
+# Citation
+If you found the code helpful for your research, please cite our paper:
+```
+@article{wardArtificialIntelligencePrediction2022,
+  title = {Artificial Intelligence Prediction of Cholecystectomy Operative Course from Automated Identification of Gallbladder Inflammation},
+  author = {Ward, Thomas M. and Hashimoto, Daniel A. and Ban, Yutong and Rosman, Guy and Meireles, Ozanan R.},
+  year = {2022},
+  month = jan,
+  journal = {Surgical Endoscopy},
+  issn = {0930-2794, 1432-2218},
+  doi = {10.1007/s00464-022-09009-z},
+  langid = {english}
+}
+```
 
 # LICENSE
 
